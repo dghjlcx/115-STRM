@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>AList 签名生成器 (纯前端版 - ZIP STRM 下载)</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        form { margin-bottom: 20px; }
+        label { display: block; margin: 10px 0 5px; }
+        input[type="text"], input[type="url"] { width: 100%; padding: 8px; box-sizing: border-box; }
+        input[type="file"] { margin: 5px 0; }
+        input[type="checkbox"] { margin-right: 5px; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer; margin: 5px 5px 5px 0; }
+        button:hover { background: #0056b3; }
+        .output { background: #f8f9fa; padding: 15px; border-radius: 5px; margin-top: 20px; display: none; text-align: center; }
+        .error { color: red; margin-top: 10px; display: none; }
+        #loading { display: none; }
+        .help-text { font-size: 0.9em; color: #666; margin-top: 5px; display: block; }
+        #downloadBtn { background: #28a745; margin-top: 10px; }
+        #downloadBtn:hover { background: #218838; }
+    </style>
+</head>
+<body>
+    <h1>AList 文件下载签名生成器 (纯前端版)</h1>
+    <p>说明: 所有计算在浏览器本地完成，配置保存在浏览器 localStorage。导入 TXT/JSON 树后，默认批量生成；可切换单路径模式。选择文件后自动导入！</p>
+    
+    <form id="configForm">
+        <label for="baseURL">服务器地址 (Base URL):</label>
+        <input type="url" id="baseURL" name="baseURL" required>
+        <small class="help-text">说明: AList 服务器的完整地址。例子: http://192.168.10.115:5244</small>
+
+        <label for="token">令牌 (Token):</label>
+        <input type="text" id="token" name="token" placeholder="空则生成无签名链接">
+        <small class="help-text">说明: AList 后台的签名密钥 (Sign Secret)，从设置 > 全局获取。空则生成无签名 STRM。例子: alist-48c57e23-f287-4b67-9c5e-...</small>
+
+        <label for="rootDir">根目录 (Root Dir):</label>
+        <input type="text" id="rootDir" name="rootDir" required>
+        <small class="help-text">说明: 存储根目录路径，必须以 / 开头。例子: /我的115</small>
+
+        <label for="subDir">子目录/文件 (Sub Dir):</label>
+        <input type="text" id="subDir" name="subDir" list="pathList" placeholder="从导入的树中选择或手动输入（单路径模式）">
+        <datalist id="pathList"></datalist>
+        <input type="file" id="treeFile" accept=".txt,.json" style="margin-top: 5px;">
+        <small class="help-text">说明: 相对根目录的子路径，可包含文件。选择 TXT (e.g., |——文件夹 | |-文件.mp4) 或 JSON 树文件后自动导入，下拉选择路径。</small>
+        <ul id="treePaths"></ul>
+
+        <label>
+            <input type="checkbox" id="batchMode" checked> 批量模式 (使用目录树)
+        </label>
+        <small class="help-text">说明: 勾选使用导入的树批量生成；取消切换单路径模式（手动输入 Sub Dir）。</small>
+
+        <label for="mediaFormats">媒体格式 (Media Formats):</label>
+        <input type="text" id="mediaFormats" name="mediaFormats" placeholder="e.g., .mp4|.mkv|.avi|.iso" style="width: 100%; padding: 8px; box-sizing: border-box;">
+        <small class="help-text">说明: 以 | 分割的扩展名列表，用于过滤目录树文件（空则默认 .mp4|.mkv|.avi|.iso）。例子: .mp4|.mkv|.avi|.iso</small>
+
+        <button type="submit">生成STRM</button>
+        <button type="button" id="clearConfig">清空配置（恢复默认）</button>
+        <div id="loading">批量计算中...（上百条只需几秒）</div>
+    </form>
+
+    <div id="output" class="output"></div>
+    <div id="error" class="error"></div>
+
+    <script>
+        // localStorage 键名
+        const STORAGE_KEY = 'alist-sign-config';
+        let pathOptions = []; // 存储从树解析的路径数组
+        let generatedLinks = []; // 存储生成的 fullPath 数组（用于 STRM ZIP）
+
+        // 确保路径以 / 开头
+        function ensureLeadingSlash(str) {
+            return str.trim().startsWith('/') ? str.trim() : '/' + str.trim();
+        }
+
+        // 获取媒体格式列表（空则默认）
+        function getMediaFormats() {
+            let formatsStr = document.getElementById('mediaFormats').value.trim();
+            if (!formatsStr) {
+                formatsStr = '.mp4|.mkv|.avi|.iso';  // 默认
+            }
+            return formatsStr.split('|').map(ext => ext.toLowerCase().trim()).filter(ext => ext);
+        }
+
+        // 加载配置（从 localStorage）
+        function loadConfig() {
+            const saved = localStorage.getItem(STORAGE_KEY);
+            if (saved) {
+                const config = JSON.parse(saved);
+                document.getElementById('baseURL').value = config.baseURL || '';
+                document.getElementById('token').value = config.token || '';
+                document.getElementById('rootDir').value = ensureLeadingSlash(config.rootDir || '');
+                document.getElementById('subDir').value = ensureLeadingSlash(config.subDir || '');
+                document.getElementById('mediaFormats').value = config.mediaFormats || '';
+                document.getElementById('batchMode').checked = config.batchMode !== false;  // 默认 true
+                if (config.pathOptions) {
+                    pathOptions = config.pathOptions;
+                    updatePathDatalist();
+                }
+            } else {
+                // 默认配置
+                document.getElementById('baseURL').value = 'http://192.168.10.115:5244';
+                document.getElementById('token').value = 'alist-48c57e23-f287-4b67-9c5e-********************';
+                document.getElementById('rootDir').value = ensureLeadingSlash('/我的115');
+                document.getElementById('subDir').value = ensureLeadingSlash('/A/一本道系列/[7sht.me]010619_794-1pon/010619_794-1pon-1080p.mp4');
+                document.getElementById('mediaFormats').value = '';  // 空则默认
+                document.getElementById('batchMode').checked = true;  // 默认批量
+            }
+        }
+
+        // 保存配置到 localStorage（包括路径选项）
+        function saveConfig() {
+            const config = {
+                baseURL: document.getElementById('baseURL').value,
+                token: document.getElementById('token').value,
+                rootDir: document.getElementById('rootDir').value,
+                subDir: document.getElementById('subDir').value,
+                mediaFormats: document.getElementById('mediaFormats').value,
+                batchMode: document.getElementById('batchMode').checked,  // 新增
+                pathOptions: pathOptions
+            };
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+        }
+
+        // 更新 datalist（下拉选项）
+        function updatePathDatalist() {
+            const datalist = document.getElementById('pathList');
+            datalist.innerHTML = '';
+            pathOptions.forEach(path => {
+                const option = document.createElement('option');
+                option.value = path;
+                datalist.appendChild(option);
+            });
+        }
+
+        // 解析 JSON 树（提取匹配媒体格式的文件路径）
+        function parseJsonTree(tree) {
+            const formats = getMediaFormats();
+            const paths = [];
+            function recurse(node, currentPath = '') {
+                if (node.children) {
+                    node.children.forEach(child => {
+                        const newPath = currentPath ? `${currentPath}/${child.name}` : `/${child.name}`;
+                        if (child.name && formats.some(fmt => child.name.toLowerCase().endsWith(fmt))) {
+                            paths.push(newPath);
+                        }
+                        recurse(child, newPath);
+                    });
+                }
+            }
+            recurse(tree);
+            return paths;
+        }
+
+        // 解析 TXT 树（按 | 数判断层级，仅匹配媒体格式的文件）
+        function parseTxtTree(text) {
+            const formats = getMediaFormats();
+            const lines = text.trim().split('\n');
+            const paths = [];
+            const stack = [];
+
+            for (let line of lines) {
+                // 层级 = | 的数量
+                const level = (line.match(/\|/g) || []).length;
+                if (level === 0) continue;
+
+                // 找到最后一个 | 后的 suffix
+                const lastPipe = line.lastIndexOf('|');
+                let suffix = line.substring(lastPipe + 1).trimStart();
+
+                // 跳过固定 connector 前缀： "——" (两个 em dash) 或 "-" (一个 hyphen)，然后跳空格
+                let i = 0;
+                if (suffix.startsWith('——')) {
+                    i = 2;  // 跳过两个 "—"
+                } else if (suffix.startsWith('-')) {
+                    i = 1;  // 跳过一个 "-"
+                }
+                // 跳过后续空格
+                while (i < suffix.length && suffix[i] === ' ') {
+                    i++;
+                }
+
+                const name = suffix.substring(i).trim();
+                if (!name) continue;
+
+                // 调整栈: pop until len == level - 1
+                while (stack.length > level - 1) {
+                    stack.pop();
+                }
+
+                // 添加 name 到栈
+                stack.push(name);
+
+                // 如果匹配媒体格式
+                if (formats.some(fmt => name.toLowerCase().endsWith(fmt))) {
+                    const currentPath = stack.join('/');
+                    paths.push('/' + currentPath);
+                }
+            }
+            return paths;
+        }
+
+        // 自动导入文件处理（监听 change 事件）
+        document.getElementById('treeFile').addEventListener('change', function() {
+            const file = this.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    let paths = [];
+                    let isValidTree = false;
+                    if (file.name.endsWith('.json')) {
+                        const tree = JSON.parse(e.target.result);
+                        paths = parseJsonTree(tree);
+                        isValidTree = true; // JSON 假设有效
+                    } else {
+                        // 检查 TXT 是否为指定目录树：第一行含 "|——"
+                        const lines = e.target.result.trim().split('\n');
+                        if (lines.length > 0 && lines[0].includes('|——')) {
+                            isValidTree = true;
+                            paths = parseTxtTree(e.target.result);
+                        }
+                    }
+                    if (!isValidTree) {
+                        alert('非指定的目录树文件！请确保 TXT 文件以 "|——" 开头（e.g., |——文件夹）。JSON 文件需标准树结构。');
+                        return;
+                    }
+                    pathOptions = paths;
+                    updatePathDatalist();
+                    console.log('导入路径:', paths); // 调试日志
+                    alert(`导入成功！解析到 ${pathOptions.length} 个媒体文件路径。`);
+                    saveConfig();
+                } catch (error) {
+                    console.error('解析错误:', error); // 调试日志
+                    alert('解析文件失败: ' + error.message + '\nTXT: 确保格式如 |——文件夹\n| |-文件.mp4\nJSON: 标准树结构。');
+                }
+            };
+            reader.readAsText(file);
+        });
+
+        // 清空配置
+        document.getElementById('clearConfig').addEventListener('click', function() {
+            if (confirm('确定清空配置并恢复默认吗？')) {
+                localStorage.removeItem(STORAGE_KEY);
+                pathOptions = [];
+                generatedLinks = [];
+                updatePathDatalist();
+                loadConfig();
+                alert('配置已清空！');
+            }
+        });
+
+        // 合并路径：删除多余 "/"，保留单斜杠
+        function mergePath(root, sub) {
+            return root.trim().replace(/\/+$/, '') + '/' + sub.trim().replace(/^\/+/, '');
+        }
+
+        // URL-safe Base64（保留=填充）
+        function safeBase64(data) {
+            let binStr = String.fromCharCode.apply(null, new Uint8Array(data));
+            let base64 = btoa(binStr)
+                .replace(/\+/g, '-')
+                .replace(/\//g, '_');
+            return base64; // 保留 =
+        }
+
+        // 生成单个签名（使用 Web Crypto API 的 HMAC-SHA256）
+        async function generateSign(internalPath, expireTimeStamp, token) {
+            if (!token) {
+                // 无 token，直接返回空签名
+                return '';
+            }
+            const encoder = new TextEncoder();
+            const keyData = encoder.encode(token);
+            const data = encoder.encode(internalPath + ':' + expireTimeStamp);
+
+            const key = await crypto.subtle.importKey(
+                'raw',
+                keyData,
+                { name: 'HMAC', hash: 'SHA-256' },
+                false,
+                ['sign']
+            );
+
+            const signature = await crypto.subtle.sign('HMAC', key, data);
+            const _sign = safeBase64(signature);
+
+            return _sign + ':' + expireTimeStamp;
+        }
+
+        // 表单提交处理（批量/单路径模式）
+        document.getElementById('configForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const loading = document.getElementById('loading');
+            const output = document.getElementById('output');
+            const errorDiv = document.getElementById('error');
+
+            loading.style.display = 'block';
+            output.style.display = 'none';
+            errorDiv.style.display = 'none';
+
+            try {
+                saveConfig();
+
+                let baseURL = document.getElementById('baseURL').value.trim();
+                const token = document.getElementById('token').value.trim();
+                let rootDir = ensureLeadingSlash(document.getElementById('rootDir').value);  // 自动补全 /
+                const expire = "0";
+                const formats = getMediaFormats();
+                const isBatchMode = document.getElementById('batchMode').checked;
+
+                if (!baseURL || !rootDir) {
+                    throw new Error('Base URL 和 Root Dir 不能为空！');
+                }
+
+                let count = 0;
+                generatedLinks = []; // 重置
+                const filenameCounts = {}; // 跟踪文件名计数，避免覆盖
+
+                if (isBatchMode && pathOptions.length > 0) {
+                    // 批量生成：为每个树路径生成链接（补全 subDir /）
+                    const subDirs = pathOptions.map(p => ensureLeadingSlash(p));  // 批量补全 /
+                    const promises = subDirs.map(async (subDir) => {
+                        const internalPath = mergePath(rootDir, subDir);
+                        const sign = await generateSign(internalPath, expire, token);  // token 空则无签名
+                        const fullPath = baseURL + '/d' + internalPath + (sign ? '?sign=' + sign : '');
+                        let filename = subDir.split('/').pop();
+                        const matchedExt = formats.find(fmt => filename.toLowerCase().endsWith(fmt));
+                        filename = matchedExt ? filename.replace(matchedExt, '.strm') : filename.replace('.mp4', '.strm');  // 动态替换匹配 ext
+                        
+                        // 处理重复文件名
+                        let baseName = filename.replace('.strm', '');
+                        let suffix = '';
+                        let counter = 1;
+                        while (filenameCounts[filename] !== undefined) {
+                            counter++;
+                            suffix = `(${counter})`;
+                            filename = `${baseName}${suffix}.strm`;
+                        }
+                        filenameCounts[filename] = true;
+                        
+                        generatedLinks.push({ url: fullPath, filename: filename }); // 保存用于 STRM
+                        count++;
+                    });
+                    await Promise.all(promises);
+                    console.log(`批量生成 ${count} 个链接`); // 调试日志
+                } else {
+                    // 单路径生成（补全 subDir /）
+                    let subDir = ensureLeadingSlash(document.getElementById('subDir').value);
+                    if (!subDir) throw new Error('Sub Dir 不能为空（单路径模式需手动输入）');
+                    const internalPath = mergePath(rootDir, subDir);
+                    const sign = await generateSign(internalPath, expire, token);  // token 空则无签名
+                    const fullPath = baseURL + '/d' + internalPath + (sign ? '?sign=' + sign : '');
+                    let filename = subDir.split('/').pop();
+                    const matchedExt = formats.find(fmt => filename.toLowerCase().endsWith(fmt));
+                    filename = matchedExt ? filename.replace(matchedExt, '.strm') : filename.replace('.mp4', '.strm');
+                    generatedLinks.push({ url: fullPath, filename: filename });
+                    count = 1;
+                    console.log('单路径生成 1 个链接'); // 调试日志
+                }
+
+                // 输出只显示条数 + 下载按钮
+                output.innerHTML = `
+                    <h3>成功生成 ${count} 个 STRM 文件</h3>
+                    <button id="downloadBtn" type="button">下载 STRM ZIP 包</button>
+                `;
+                output.style.display = 'block';
+
+                // 绑定下载按钮事件
+                document.getElementById('downloadBtn').addEventListener('click', downloadAllSTRM);
+            } catch (error) {
+                console.error('生成错误:', error); // 调试日志
+                errorDiv.textContent = '生成失败: ' + error.message;
+                errorDiv.style.display = 'block';
+            } finally {
+                loading.style.display = 'none';
+            }
+        });
+
+        // 下载 STRM（单文件直接下载，批量 ZIP）
+        async function downloadAllSTRM() {
+            if (generatedLinks.length === 0) {
+                alert('无链接可下载！请先生成签名。');
+                return;
+            }
+
+            try {
+                if (generatedLinks.length === 1) {
+                    // 单文件直接下载
+                    const { url, filename } = generatedLinks[0];
+                    const blob = new Blob([url], { type: 'text/plain' });
+                    const a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(a.href);
+                    alert(`已下载单个 STRM 文件: ${filename}`);
+                } else {
+                    // 批量 ZIP
+                    const zip = new JSZip();
+                    for (let { url, filename } of generatedLinks) {
+                        zip.file(filename, url);
+                    }
+
+                    const content = await zip.generateAsync({ type: 'blob' });
+                    const a = document.createElement('a');
+                    a.href = URL.createObjectURL(content);
+                    a.download = 'alist-strm-files.zip';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(a.href);
+
+                    alert(`已下载 ZIP 包，包含 ${generatedLinks.length} 个 STRM 文件！`);
+                }
+            } catch (error) {
+                console.error('下载错误:', error);
+                alert('下载失败: ' + error.message);
+            }
+        }
+
+        // 页面加载时加载配置
+        document.addEventListener('DOMContentLoaded', loadConfig);
+    </script>
+</body>
+</html>
