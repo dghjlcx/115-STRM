@@ -19,6 +19,8 @@
         .help-text { font-size: 0.9em; color: #666; margin-top: 5px; display: block; }
         #downloadBtn { background: #28a745; margin-top: 10px; }
         #downloadBtn:hover { background: #218838; }
+        #getTokenBtn { background: #17a2b8; padding: 8px 15px; margin-left: 10px; font-size: 0.9em; }
+        #getTokenBtn:hover { background: #138496; }
     </style>
 </head>
 <body>
@@ -31,7 +33,10 @@
         <small class="help-text">说明: AList 服务器的完整地址。例子: http://192.168.10.115:5244</small>
 
         <label for="token">令牌 (Token):</label>
-        <input type="text" id="token" name="token" placeholder="空则生成无签名链接">
+        <div style="display: flex; align-items: center;">
+            <input type="text" id="token" name="token" placeholder="空则生成无签名链接" style="flex: 1; margin-right: 10px;">
+            <button type="button" id="getTokenBtn">去复制令牌</button>
+        </div>
         <small class="help-text">说明: AList 后台的签名密钥 (Sign Secret)，从设置 > 全局获取。空则生成无签名 STRM。例子: alist-48c57e23-f287-4b67-9c5e-...</small>
 
         <label for="rootDir">根目录 (Root Dir):</label>
@@ -53,6 +58,10 @@
         <label for="mediaFormats">媒体格式 (Media Formats):</label>
         <input type="text" id="mediaFormats" name="mediaFormats" placeholder="e.g., .mp4|.mkv|.avi|.iso" style="width: 100%; padding: 8px; box-sizing: border-box;">
         <small class="help-text">说明: 以 | 分割的扩展名列表，用于过滤目录树文件（空则默认 .mp4|.mkv|.avi|.iso）。例子: .mp4|.mkv|.avi|.iso</small>
+
+        <label for="filterKeywords">过滤关键字 (Filter Keywords):</label>
+        <input type="text" id="filterKeywords" name="filterKeywords" placeholder="e.g., ab.com@|[abc.top]|bcd.cc_" style="width: 100%; padding: 8px; box-sizing: border-box;">
+        <small class="help-text">说明: 以 | 分割的关键字列表，用于重命名 STRM 文件（移除匹配前缀）。空则不过滤。例子: ab.com@|[abc.top]|bcd.cc_</small>
 
         <button type="submit">生成STRM</button>
         <button type="button" id="clearConfig">清空配置（恢复默认）</button>
@@ -82,6 +91,31 @@
             return formatsStr.split('|').map(ext => ext.toLowerCase().trim()).filter(ext => ext);
         }
 
+        // 获取过滤关键字列表（空则空数组）
+        function getFilterKeywords() {
+            let keywordsStr = document.getElementById('filterKeywords').value.trim();
+            if (!keywordsStr) {
+                return [];  // 空则不过滤
+            }
+            return keywordsStr.split('|').map(kw => kw.trim()).filter(kw => kw);
+        }
+
+        // 转义正则特殊字符
+        function escapeRegExp(string) {
+            return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+
+        // 移除匹配关键字的前缀（重命名逻辑）
+        function removeKeywords(filename, keywords) {
+            let cleaned = filename;
+            keywords.forEach(kw => {
+                // 移除以 kw 开头的部分（忽略大小写）
+                const regex = new RegExp('^' + escapeRegExp(kw), 'i');
+                cleaned = cleaned.replace(regex, '').trim();
+            });
+            return cleaned;
+        }
+
         // 加载配置（从 localStorage）
         function loadConfig() {
             const saved = localStorage.getItem(STORAGE_KEY);
@@ -92,6 +126,7 @@
                 document.getElementById('rootDir').value = ensureLeadingSlash(config.rootDir || '');
                 document.getElementById('subDir').value = ensureLeadingSlash(config.subDir || '');
                 document.getElementById('mediaFormats').value = config.mediaFormats || '';
+                document.getElementById('filterKeywords').value = config.filterKeywords || '';  // 新增
                 document.getElementById('batchMode').checked = config.batchMode !== false;  // 默认 true
                 if (config.pathOptions) {
                     pathOptions = config.pathOptions;
@@ -100,10 +135,11 @@
             } else {
                 // 默认配置
                 document.getElementById('baseURL').value = 'http://192.168.10.115:5244';
-                document.getElementById('token').value = 'alist-48c57e23-f287-4b67-9c5e-********************';
+                document.getElementById('token').value = 'alist-48c57e23-f287-4b67-9c5e-**************************************';
                 document.getElementById('rootDir').value = ensureLeadingSlash('/我的115');
                 document.getElementById('subDir').value = ensureLeadingSlash('/A/一本道系列/[7sht.me]010619_794-1pon/010619_794-1pon-1080p.mp4');
                 document.getElementById('mediaFormats').value = '';  // 空则默认
+                document.getElementById('filterKeywords').value = '';  // 默认空
                 document.getElementById('batchMode').checked = true;  // 默认批量
             }
         }
@@ -116,7 +152,8 @@
                 rootDir: document.getElementById('rootDir').value,
                 subDir: document.getElementById('subDir').value,
                 mediaFormats: document.getElementById('mediaFormats').value,
-                batchMode: document.getElementById('batchMode').checked,  // 新增
+                filterKeywords: document.getElementById('filterKeywords').value,  // 新增
+                batchMode: document.getElementById('batchMode').checked,
                 pathOptions: pathOptions
             };
             localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
@@ -251,6 +288,17 @@
             }
         });
 
+        // 获取 Token 按钮事件
+        document.getElementById('getTokenBtn').addEventListener('click', function() {
+            const baseURL = document.getElementById('baseURL').value.trim();
+            if (!baseURL) {
+                alert('请先输入服务器地址 (Base URL)！');
+                return;
+            }
+            const manageURL = baseURL + '/@manage/settings/other';
+            window.open(manageURL, '_blank');
+        });
+
         // 合并路径：删除多余 "/"，保留单斜杠
         function mergePath(root, sub) {
             return root.trim().replace(/\/+$/, '') + '/' + sub.trim().replace(/^\/+/, '');
@@ -309,6 +357,7 @@
                 let rootDir = ensureLeadingSlash(document.getElementById('rootDir').value);  // 自动补全 /
                 const expire = "0";
                 const formats = getMediaFormats();
+                const keywords = getFilterKeywords();  // 新增
                 const isBatchMode = document.getElementById('batchMode').checked;
 
                 if (!baseURL || !rootDir) {
@@ -326,9 +375,10 @@
                         const internalPath = mergePath(rootDir, subDir);
                         const sign = await generateSign(internalPath, expire, token);  // token 空则无签名
                         const fullPath = baseURL + '/d' + internalPath + (sign ? '?sign=' + sign : '');
-                        let filename = subDir.split('/').pop();
-                        const matchedExt = formats.find(fmt => filename.toLowerCase().endsWith(fmt));
-                        filename = matchedExt ? filename.replace(matchedExt, '.strm') : filename.replace('.mp4', '.strm');  // 动态替换匹配 ext
+                        let originalFilename = subDir.split('/').pop();
+                        let cleanedFilename = removeKeywords(originalFilename, keywords);  // 新增：移除关键字
+                        const matchedExt = formats.find(fmt => cleanedFilename.toLowerCase().endsWith(fmt));
+                        let filename = matchedExt ? cleanedFilename.replace(matchedExt, '.strm') : cleanedFilename.replace('.mp4', '.strm');  // 动态替换匹配 ext
                         
                         // 处理重复文件名
                         let baseName = filename.replace('.strm', '');
@@ -353,9 +403,10 @@
                     const internalPath = mergePath(rootDir, subDir);
                     const sign = await generateSign(internalPath, expire, token);  // token 空则无签名
                     const fullPath = baseURL + '/d' + internalPath + (sign ? '?sign=' + sign : '');
-                    let filename = subDir.split('/').pop();
-                    const matchedExt = formats.find(fmt => filename.toLowerCase().endsWith(fmt));
-                    filename = matchedExt ? filename.replace(matchedExt, '.strm') : filename.replace('.mp4', '.strm');
+                    let originalFilename = subDir.split('/').pop();
+                    let cleanedFilename = removeKeywords(originalFilename, keywords);  // 新增：移除关键字
+                    const matchedExt = formats.find(fmt => cleanedFilename.toLowerCase().endsWith(fmt));
+                    let filename = matchedExt ? cleanedFilename.replace(matchedExt, '.strm') : cleanedFilename.replace('.mp4', '.strm');
                     generatedLinks.push({ url: fullPath, filename: filename });
                     count = 1;
                     console.log('单路径生成 1 个链接'); // 调试日志
