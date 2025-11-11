@@ -21,6 +21,9 @@
         #downloadBtn:hover { background: #218838; }
         #getTokenBtn { background: #17a2b8; padding: 8px 15px; margin-left: 10px; font-size: 0.9em; }
         #getTokenBtn:hover { background: #138496; }
+        .footer { text-align: center; margin-top: 40px; padding: 20px; border-top: 1px solid #ddd; }
+        .footer a { margin: 0 15px; color: #007bff; text-decoration: none; }
+        .footer a:hover { text-decoration: underline; }
     </style>
 </head>
 <body>
@@ -35,7 +38,7 @@
         <label for="token">令牌 (Token):</label>
         <div style="display: flex; align-items: center;">
             <input type="text" id="token" name="token" placeholder="空则生成无签名链接" style="flex: 1; margin-right: 10px;">
-            <button type="button" id="getTokenBtn">去复制令牌</button>
+            <button type="button" id="getTokenBtn">获取 Token</button>
         </div>
         <small class="help-text">说明: AList 后台的签名密钥 (Sign Secret)，从设置 > 全局获取。空则生成无签名 STRM。例子: alist-48c57e23-f287-4b67-9c5e-...</small>
 
@@ -70,6 +73,15 @@
 
     <div id="output" class="output"></div>
     <div id="error" class="error"></div>
+
+    <footer class="footer">
+        <h3>相关链接</h3>
+        <p>
+            <a href="https://github.com/dghjlcx" target="_blank">GitHub 作者页面</a> |
+            <a href="https://t.me/xiaoyaliu00" target="_blank">xiaoya官方群聊</a> |
+            <a href="https://t.me/wo_shi_ni_ba_ba" target="_blank">作者 TG</a>
+        </p>
+    </footer>
 
     <script>
         // localStorage 键名
@@ -135,7 +147,7 @@
             } else {
                 // 默认配置
                 document.getElementById('baseURL').value = 'http://192.168.10.115:5244';
-                document.getElementById('token').value = 'alist-48c57e23-f287-4b67-9c5e-**************************************';
+                document.getElementById('token').value = 'alist-48c57e23-f287-4b67-9c5e-bf86924becd6ilIpC4HLJGifFWQoA7Swi272dPfJFIQ9rPLZZRhMMlQ8GPFrJVBPVfIDNpkct0EB';
                 document.getElementById('rootDir').value = ensureLeadingSlash('/我的115');
                 document.getElementById('subDir').value = ensureLeadingSlash('/A/一本道系列/[7sht.me]010619_794-1pon/010619_794-1pon-1080p.mp4');
                 document.getElementById('mediaFormats').value = '';  // 空则默认
